@@ -8,7 +8,7 @@ import           GHC.Generics                   ( Generic )
 import qualified Data.HashSet                  as HashSet
 import           Data.HashSet                   ( HashSet )
 import qualified Data.HashMap.Strict           as HashMap
-import           Data.HashMap.Strict            ( )
+import           Data.HashMap.Strict            ( HashMap )
 import           Data.Hashable                  ( Hashable )
 import           Control.Monad                  ( guard
                                                 , forM_
@@ -16,69 +16,48 @@ import           Control.Monad                  ( guard
 import qualified Data.List                     as List
 import           Data.Maybe                     ( catMaybes )
 
+import           System.Environment             ( getArgs )
+import           Note                           ( Note(..) )
+import qualified Note
+
 
 main :: IO ()
 main = do
-  putStrLn "hello world"
+  notes <- getArgs
+  let vs = voicings $ layout guitar $ Note.from <$> notes
+  forM_ (take 10 $ vs) print
 
-data Note
-  = N1  -- C
-  | N2  -- Db
-  | N3  -- D
-  | N4  -- Eb
-  | N5  -- E
-  | N6  -- F
-  | N7  -- Gb
-  | N8  -- G
-  | N9  -- Ab
-  | N10 -- A
-  | N11 -- Bb
-  | N12 -- B
-  deriving stock (Eq, Ord, Enum, Bounded, Show, Generic)
+data Scale
+  = Major
+  | NaturalMinor
+  | HarmonicMinor
+  | JazzMinor
+  | WholeTone
+  | Diminished
+  deriving stock (Eq, Generic)
   deriving anyclass (Hashable)
 
-fromName :: String -> Note
-fromName "C"  = N1
-fromName "C#" = N2
-fromName "Db" = N2
-fromName "D"  = N3
-fromName "D#" = N4
-fromName "Eb" = N4
-fromName "E"  = N5
-fromName "F"  = N6
-fromName "F#" = N7
-fromName "Gb" = N7
-fromName "G"  = N8
-fromName "G#" = N9
-fromName "Ab" = N9
-fromName "A"  = N10
-fromName "A#" = N11
-fromName "Bb" = N11
-fromName "B"  = N12
-fromName n    = error $ "Unknown note name: " ++ n
+scales :: HashMap Scale ([Note] -> [Note])
+scales = HashMap.fromList
+  [ (Major        , pick [0, 2, 4, 5, 7, 9, 11])
+  , (NaturalMinor , pick [0, 2, 3, 5, 7, 8, 10])
+  , (HarmonicMinor, pick [0, 2, 3, 5, 7, 8, 11])
+  , (JazzMinor    , pick [0, 2, 3, 5, 7, 9, 11])
+  , (WholeTone    , pick [0, 2, 4, 6, 8, 10])
+  , (Diminished   , pick [0, 1, 3, 4, 6, 7, 9, 10])
+  ]
+  where pick is ns = (ns !!) <$> is
+
+notesFrom :: String -> [Note]
+notesFrom noteName | note == minBound = [note ..]
+                   | otherwise        = [note ..] ++ [minBound .. pred note]
+  where note = Note.from noteName
 
 maxStretch :: Int
 maxStretch = 4
 
-gv :: [String] -> IO ()
-gv notes = do
-  let vs = voicings $ layout guitar $ notes
-  forM_
-    (take 10 $ chunksOf 5 vs)
-    (\chunk -> do
-      putStr (showByRow $ show <$> chunk)
-      putStr "\n"
-    )
-
-showByRow :: [String] -> String
-showByRow input = unlines $ (List.intercalate "   " <$> List.transpose broken)
-  where broken = lines <$> input
-
-chunksOf :: Int -> [a] -> [[a]]
-chunksOf n xs = chunk : chunksOf n rest where (chunk, rest) = splitAt n xs
-
 guitar :: [[Note]]
-guitar = map (course' 12 . fromName) ["E", "A", "D", "G", "B", "E"]
+guitar = map (course' 13 . Note.from) ["E", "A", "D", "G", "B", "E"]
  where
   course' :: Int -> Note -> [Note]
   course' frets note = take frets $ cycle notes
@@ -88,19 +67,27 @@ guitar = map (course' 12 . fromName) ["E", "A", "D", "G", "B", "E"]
 
 newtype Layout = Layout [[Bool]]
 
+guideLine :: String
+guideLine = "\\\\          '       '       '       '           \""
+
 instance Show Layout where
-  show (Layout courses) = unlines $ reverse $ fmap showCourse courses
+  show (Layout courses) = unlines $ (showCourse <$> courses) ++ [guideLine]
    where
-    showCourse (True  : xs) = 'o' : fmap showNote xs
-    showCourse (False : xs) = '|' : fmap showNote xs
-    showCourse xs           = fmap showNote xs
 
-    showNote False = '-'
-    showNote True  = 'x'
+    showCourse :: [Bool] -> String
+    showCourse [] = ""
+    showCourse (x : xs) =
+      showFirst x ++ "   " ++ (List.intercalate " | " (showRest <$> xs))
 
-layout :: [[Note]] -> [String] -> Layout
+    showFirst True  = "o"
+    showFirst False = "|"
+
+    showRest True  = "x"
+    showRest False = "-"
+
+layout :: [[Note]] -> [Note] -> Layout
 layout neck notes = Layout $ (fmap . fmap) (flip HashSet.member $ noteSet) neck
-  where noteSet = HashSet.fromList $ fromName <$> notes
+  where noteSet = HashSet.fromList notes
 
 voicings :: Layout -> [Fingering]
 voicings (Layout courses) = do
@@ -142,39 +129,23 @@ newtype Fingering = Fingering [Placement]
 
 instance Show Fingering where
   show (Fingering placements) =
-    unlines $ List.transpose $ (uncurry showCourse) <$> zip [0 ..] placements
+    unlines $ (showCourse <$> reverse placements) ++ [guideLine]
    where
-    maxIndex    = length placements - 1
     fretsToShow = 12
-    showCourse :: Int -> Placement -> String
-    showCourse n Skip = (topChar n) : (replicate fretsToShow (lowerChar n))
-    showCourse n Open = '○' : (replicate fretsToShow (lowerChar n))
-    showCourse n (Fingered frt fng) = concat
-      [ [topChar n]
-      , replicate (frt - 1) (lowerChar n)
-      , [forFinger fng]
-      , replicate (fretsToShow - (frt)) (lowerChar n)
-      ]
 
-    topChar n | n == maxIndex = '╕'
-              | n == 0        = '╒'
-              | otherwise     = '╤'
-    lowerChar n | n == 0        = '├'
-                | n == maxIndex = '┤'
-                | otherwise     = '┼'
+    showCourse :: Placement -> String
+    showCourse Skip =
+      "|" ++ "   " ++ List.intercalate " | " (replicate fretsToShow "-")
+    showCourse Open =
+      "o" ++ "   " ++ List.intercalate " | " (replicate fretsToShow "-")
+    showCourse (Fingered frt fng) = "|" ++ "   " ++ List.intercalate
+      " | "
+      (  (replicate (frt - 1) "-")
+      ++ [forFinger fng]
+      ++ (replicate (fretsToShow - frt) "-")
+      )
 
-    forFinger Index  = '➊'
-    forFinger Middle = '➋'
-    forFinger Ring   = '➌'
-    forFinger Little = '➍'
-
-
-
-toFinger :: Placement -> Maybe Finger
-toFinger Skip     = Nothing
-toFinger Open     = Nothing
-toFinger fingered = Just $ finger fingered
-
+    forFinger = show . (+ 1) . fromEnum
 
 placement :: Int -> [Finger] -> [Placement]
 placement _   []      = []
