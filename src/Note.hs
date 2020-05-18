@@ -7,6 +7,7 @@
 module Note
   ( Note(..)
   , from
+  , sequenceFrom
   )
 where
 
@@ -48,3 +49,8 @@ from "A#" = N11
 from "Bb" = N11
 from "B"  = N12
 from n    = error $ "Unknown note name: " ++ n
+
+sequenceFrom :: String -> [Note]
+sequenceFrom noteName | note == minBound = [note ..]
+                      | otherwise        = [note ..] ++ [minBound .. pred note]
+  where note = Note.from noteName
